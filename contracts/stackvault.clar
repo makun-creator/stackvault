@@ -91,3 +91,90 @@
 (define-read-only (get-user-portfolios (user principal))
   (default-to (list) (map-get? UserPortfolios user))
 )
+
+;; Calculate rebalancing requirements for a portfolio
+(define-read-only (calculate-rebalance-amounts (portfolio-id uint))
+  (let (
+      (portfolio (unwrap! (get-portfolio portfolio-id) ERR-INVALID-PORTFOLIO))
+      (total-value (get total-value portfolio))
+    )
+    (ok {
+      portfolio-id: portfolio-id,
+      total-value: total-value,
+      needs-rebalance: (> (- stacks-block-height (get last-rebalanced portfolio)) u144), ;; 24 hours in blocks
+    })
+  )
+)
+
+;; PRIVATE FUNCTIONS
+
+;; Validate token ID within portfolio constraints
+(define-private (validate-token-id
+    (portfolio-id uint)
+    (token-id uint)
+  )
+  (let ((portfolio (unwrap! (get-portfolio portfolio-id) false)))
+    (and
+      (< token-id MAX-TOKENS-PER-PORTFOLIO)
+      (< token-id (get token-count portfolio))
+      true
+    )
+  )
+)
+
+;; Validate percentage is within acceptable range
+(define-private (validate-percentage (percentage uint))
+  (and (>= percentage u0) (<= percentage BASIS-POINTS))
+)
+
+;; Validate all percentages in a portfolio allocation
+(define-private (validate-portfolio-percentages (percentages (list 10 uint)))
+  (fold check-percentage-sum percentages true)
+)
+
+;; Helper function for percentage validation
+(define-private (check-percentage-sum
+    (current-percentage uint)
+    (valid bool)
+  )
+  (and valid (validate-percentage current-percentage))
+)
+
+;; Add portfolio to user's portfolio list
+(define-private (add-to-user-portfolios
+    (user principal)
+    (portfolio-id uint)
+  )
+  (let (
+      (current-portfolios (get-user-portfolios user))
+      (new-portfolios (unwrap! (as-max-len? (append current-portfolios portfolio-id) u20)
+        ERR-USER-STORAGE-FAILED
+      ))
+    )
+    (map-set UserPortfolios user new-portfolios)
+    (ok true)
+  )
+)
+
+;; Initialize individual portfolio asset
+(define-private (initialize-portfolio-asset
+    (index uint)
+    (token principal)
+    (percentage uint)
+    (portfolio-id uint)
+  )
+  (if (>= percentage u0) ;; Only check percentage validity since principal is already a valid type
+    (begin
+      (map-set PortfolioAssets {
+        portfolio-id: portfolio-id,
+        token-id: index,
+      } {
+        target-percentage: percentage,
+        current-amount: u0,
+        token-address: token,
+      })
+      (ok true)
+    )
+    ERR-INVALID-TOKEN
+  )
+)
